@@ -1,8 +1,9 @@
 from __future__ import annotations
 from typing import Callable
+from math import ceil
 
 import torch
-from torch import tensor, is_tensor
+from torch import tensor, is_tensor, arange, randint
 from torch.nn import Module
 import torch.nn.functional as F
 from torch.func import functional_call, vmap
@@ -32,6 +33,9 @@ def default(v, d):
 def normalize(t, eps = 1e-6):
     return F.layer_norm(t, t.shape[-1:], eps = eps)
 
+def round_up_mult(num, mult):
+    return ceil(num / mult) * mult
+
 # class
 
 class EvoStrategy(Module):
@@ -43,7 +47,7 @@ class EvoStrategy(Module):
         *,
         environment: Callable[[Module], float],  # the environment is simply a function that takes in the model and returns a fitness score
         num_generations,
-        population_size = 30,
+        noise_population_size = 30,
         learning_rate = 1e-3, # todo - optimizer
         noise_scale = 1e-3,   # the noise scaling during rollouts with environment, todo - figure out right value and make sure it can also be customized per parameter name through a dict
         param_names_to_optimize: list[str] | None = None,
@@ -80,7 +84,7 @@ class EvoStrategy(Module):
 
         # hyperparameters
 
-        self.population_size = population_size
+        self.noise_population_size = noise_population_size
         self.num_params = len(param_names_list) # just convenience for generating all the seeds for all the randn for the proposed memory efficient way
 
         self.num_generations = num_generations
@@ -145,19 +149,50 @@ class EvoStrategy(Module):
 
         model = self.noisable_model.to(self.device)
 
+        # get world size, rank, and determine if distributed
+
+        rank = self.accelerate.process_index
+        world_size = self.accelerate.num_processes
+        is_distributed = world_size > 1
+
+        # prepare the fitnesses tensor, rounded up to the next multiple of the world size for convenience
+
+        pop_size = self.noise_population_size
+        num_pop_per_machine = ceil(pop_size / world_size)
+        pop_size_round_up = num_pop_per_machine * world_size
+
+        noise_indices = arange(pop_size_round_up).chunk(world_size)[rank]
+
+        # through many generations
+
         for index in range(self.num_generations):
             generation = index + 1
-
-            fitnesses = []
 
             # predetermine the seeds for each population
             # each seed is then used as a seed for all the parameters
 
-            seeds_for_population = torch.randint(0, MAX_SEED_VALUE, (self.population_size,))
+            if is_distributed:
+                seed_for_pop = randint(0, int(1e9), (), device = self.device)
+                synced_seed = self.accelerate.reduce(seed_for_pop, reduction = 'sum').item()
+                randint_for_seed_pop = with_seed(synced_seed)(randint)
+            else:
+                randint_for_seed_pop = randint
+
+            seeds_for_population = randint_for_seed_pop(0, MAX_SEED_VALUE, (pop_size_round_up,))
+
+            # divy up work across machine
+
+            seeds_for_machine = seeds_for_population.chunk(world_size)[rank]
+
+            fitnesses = []
 
             # now loop through the entire population of noise
 
-            for individual_seed in seeds_for_population.tolist():
+            for noise_index, individual_seed in zip(noise_indices, seeds_for_machine):
+
+                if noise_index >= pop_size:
+                    fitnesses.append(0)
+                    continue
 
                 individual_param_seeds = with_seed(individual_seed)(torch.randint)(0, MAX_SEED_VALUE, (self.num_params,))
 
@@ -175,12 +210,24 @@ class EvoStrategy(Module):
 
             # normalize the fitness and weighted sum of all the noise is the update
 
-            fitnesses = tensor(fitnesses).float()
+            fitnesses = tensor(fitnesses, device = self.device).float()
 
-            self.evolve_(fitnesses, seeds_for_population)
+            # all gather
+
+            if is_distributed:
+                fitnesses = self.accelerate.gather(fitnesses)
+
+            # pass fitnesses to evolve function
+
+            self.evolve_(
+                fitnesses[:pop_size],
+                seeds_for_population
+            )
 
             # log
 
             self.print(f'[{generation}] average fitness: {fitnesses.mean():.3f} | fitness std: {fitnesses.std():.3f}')
 
         self.print('evolution complete')
+
+        self.accelerate.end_training()

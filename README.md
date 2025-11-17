@@ -28,7 +28,7 @@ model = torch.nn.Sequential(
 evo_strat = EvoStrategy(
     model,
     environment = lambda model: torch.randint(0, 100, ()), # environment is just a function that takes in the individual model (with unique noise) and outputs the fitness - you can select for whatever you want here, does not have to be differentiable.
-    population_size = 30,
+    noise_population_size = 30,
     num_generations = 100,
     learning_rate = 1e-3,
     noise_scale = 1e-3
@@ -41,6 +41,20 @@ evo_strat()
 # then save your evolved model, maybe for alternating with gradient based training
 
 torch.save(model.state_dict(), './evolved.pt')
+```
+
+## Distributed
+
+Using the CLI from 🤗 
+
+```shell
+$ accelerate config
+```
+
+Then
+
+```shell
+$ accelerate launch train.py
 ```
 
 ## Citations
