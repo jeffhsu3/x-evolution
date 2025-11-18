@@ -162,6 +162,16 @@ class EvoStrategy(Module):
 
             model.add_noise_(noise_config)
 
+    def checkpoint(self, filename = 'evolved.model'):
+
+        if not self.accelerate.is_main_process:
+            return
+
+        filepath = self.checkpoint_folder / f'{filename}.pt'
+        torch.save(self.model.state_dict(), str(filepath))
+
+        self.accelerate.wait_for_everyone()
+
     @torch.inference_mode()
     def forward(
         self
@@ -251,15 +261,12 @@ class EvoStrategy(Module):
 
             if (
                 exists(self.checkpoint_every) and
-                divisible_by(generation, self.checkpoint_every) and
-                self.accelerate.is_main_process
+                divisible_by(generation, self.checkpoint_every)
             ):
-
-                filepath = self.checkpoint_folder / f'model.ckpt.{generation}.pt'
-                torch.save(self.model.state_dict(), str(filepath))
-
-            self.accelerate.wait_for_everyone()
+                self.checkpoint(f'evolved.model.{generation}.pt')
 
         self.print('evolution complete')
+
+        self.checkpoint(f'evolved.model.final.pt')
 
         self.accelerate.end_training()
