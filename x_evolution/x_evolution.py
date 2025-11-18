@@ -112,9 +112,8 @@ class EvoStrategy(Module):
 
         self.checkpoint_every = checkpoint_every
 
-        if exists(checkpoint_every):
-            self.checkpoint_folder = Path(checkpoint_path)
-            self.checkpoint_folder.mkdir(exist_ok = True)
+        self.checkpoint_folder = Path(checkpoint_path)
+        self.checkpoint_folder.mkdir(exist_ok = True)
 
     @property
     def device(self):
@@ -164,11 +163,10 @@ class EvoStrategy(Module):
 
     def checkpoint(self, filename = 'evolved.model'):
 
-        if not self.accelerate.is_main_process:
-            return
+        if self.accelerate.is_main_process:
 
-        filepath = self.checkpoint_folder / f'{filename}.pt'
-        torch.save(self.model.state_dict(), str(filepath))
+            filepath = self.checkpoint_folder / f'{filename}.pt'
+            torch.save(self.model.state_dict(), str(filepath))
 
         self.accelerate.wait_for_everyone()
 
