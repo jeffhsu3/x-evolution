@@ -50,7 +50,7 @@ class EvoStrategy(Module):
         noise_population_size = 30,
         learning_rate = 1e-3,               # todo - optimizer
         noise_scale = 1e-3,                 # the noise scaling during rollouts with environment, todo - figure out right value and make sure it can also be customized per parameter name through a dict
-        params_to_optimize: list[str] | list[Parameter] | None = None,
+        params_to_optimize: list[str] | list[Module] | list[Parameter] | None = None,
         fitness_to_weighted_factor: Callable[[Tensor], Tensor] = normalize,
         checkpoint_every = None,            # saving every number of generations
         checkpoint_path = './checkpoints',
@@ -81,6 +81,12 @@ class EvoStrategy(Module):
 
         if is_bearable(params_to_optimize, list[Parameter]):
             params_to_optimize = [param_to_name_index[param] for param in set(params_to_optimize)]
+
+        if isinstance(params_to_optimize, Module):
+            params_to_optimize = list(params_to_optimize.parameters())
+
+        if is_bearable(params_to_optimize, list[Module]):
+            params_to_optimize = list(ModuleList(params_to_optimize).parameters())
 
         # validate
 
