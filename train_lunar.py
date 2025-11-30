@@ -72,14 +72,14 @@ from x_evolution import EvoStrategy
 
 from x_mlps_pytorch import MLP
 
-actor = MLP(8, 16, 4)
+actor = MLP(8, 16, 16, 4)
 
 evo_strat = EvoStrategy(
     actor,
     num_generations = 50_000,
-    noise_population_size = 30,
+    noise_population_size = 50,
     noise_low_rank = 3,
-    noise_scale = 5e-2,
+    noise_scale = 1e-2,
     learning_rate = 1e-3,
     use_optimizer = True,
     environment = LunarEnvironment()
