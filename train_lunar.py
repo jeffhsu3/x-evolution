@@ -88,8 +88,9 @@ evo_strat = EvoStrategy(
     optimizer_kwargs = dict(
         weight_decay = 1e-2
     ),
+    mirror_sampling = True,
     num_generations = 50_000,
-    noise_population_size = 100,
+    noise_population_size = 30,
     noise_low_rank = 5,
     noise_scale = 1e-1,
     learning_rate = 1e-3,

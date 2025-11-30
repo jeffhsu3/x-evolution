@@ -9,10 +9,12 @@ model = MLP(8, 16, 4)
 @param('params_to_optimize', (None, ['layers.1.weight'], [model.layers[1].weight]))
 @param('use_optimizer', (False, True))
 @param('noise_low_rank', (None, 1))
+@param('mirror_sampling', (False, True))
 def test_evo_strat(
     params_to_optimize,
     use_optimizer,
-    noise_low_rank
+    noise_low_rank,
+    mirror_sampling
 ):
     from random import randrange
 
@@ -24,7 +26,8 @@ def test_evo_strat(
         num_generations = 1,
         params_to_optimize = params_to_optimize,
         use_optimizer = use_optimizer,
-        noise_low_rank = noise_low_rank
+        noise_low_rank = noise_low_rank,
+        mirror_sampling = mirror_sampling
     )
 
     evo_strat('evolve')

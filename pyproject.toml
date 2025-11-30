@@ -28,7 +28,7 @@ dependencies = [
     "beartype",
     "einops>=0.8.0",
     "torch>=2.4",
-    "x-mlps-pytorch>=0.1.22",
+    "x-mlps-pytorch>=0.1.26",
     "x-transformers>=2.11.23"
 ]
 
