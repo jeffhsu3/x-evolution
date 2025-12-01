@@ -190,7 +190,7 @@ class EvoStrategy(Module):
         else:
             weights = fitnesses
 
-        weights /= self.noise_scale
+        weights /= self.noise_scale * (2. if self.mirror_sampling else 1.)
 
         if not use_optimizer:
             weights *= self.learning_rate # some learning rate that subsumes another constant
@@ -285,7 +285,7 @@ class EvoStrategy(Module):
             for noise_index, individual_seed in zip(noise_indices, seeds_for_machine):
 
                 if noise_index >= pop_size:
-                    fitnesses.append(0)
+                    fitnesses.append([0., 0.] if self.mirror_sampling else 0.)
                     continue
 
                 individual_param_seeds = with_seed(individual_seed)(randint)(0, MAX_SEED_VALUE, (self.num_params,))
