@@ -41,7 +41,8 @@ class LunarEnvironment(Module):
 
         device = next(model.parameters()).device
 
-        state, _ = self.env.reset()
+        seed = torch.randint(0, int(1e6), ())
+        state, _ = self.env.reset(seed = seed.item())
 
         step = 0
         cum_reward = 0.
@@ -84,15 +85,11 @@ actor = ResidualNormedMLP(
 evo_strat = EvoStrategy(
     actor,
     environment = LunarEnvironment(),
-    use_optimizer = True,
-    optimizer_kwargs = dict(
-        weight_decay = 1e-2
-    ),
     num_generations = 50_000,
-    noise_population_size = 100,
-    noise_low_rank = 5,
+    noise_population_size = 60,
+    noise_low_rank = 2,
     noise_scale = 1e-1,
-    learning_rate = 1e-3,
+    learning_rate = 1e-3
 )
 
 evo_strat()

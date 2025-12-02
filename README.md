@@ -28,10 +28,10 @@ model = torch.nn.Sequential(
 evo_strat = EvoStrategy(
     model,
     environment = lambda model: torch.randint(0, 100, ()), # environment is just a function that takes in the individual model (with unique noise) and outputs a scalar (the fitness) the measure you are selecting for
-    noise_population_size = 30,
-    num_generations = 100,
-    learning_rate = 1e-3,
-    noise_scale = 1e-3,
+    noise_population_size = 30, # increase this for better gradient estimates
+    noise_scale = 1e-3,       # the scale of the perturbation noise
+    num_generations = 100,    # number of generations / training steps
+    learning_rate = 1e-3,     # scale on update derived by fitness and perturb noises
     params_to_optimize = None # defaults to all parameters, but can be [str {param name}] or [Parameter]
 )
 

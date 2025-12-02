@@ -1,19 +1,21 @@
 from __future__ import annotations
 from typing import Callable
+
 from math import ceil
 from pathlib import Path
+from functools import partial
 
 import torch
-from torch import tensor, is_tensor, arange, randint
-from torch.nn import Module, Parameter
+from torch import tensor, Tensor, is_tensor, arange, randint
+from torch.nn import Module, ModuleList, Parameter
+from torch.optim import SGD
+
 import torch.nn.functional as F
 
 from beartype import beartype
 from beartype.door import is_bearable
 
 from accelerate import Accelerator
-
-from adam_atan2_pytorch import AdamAtan2
 
 from x_mlps_pytorch.noisable import (
     Noisable,
@@ -32,11 +34,14 @@ def exists(v):
 def default(v, d):
     return v if exists(v) else d
 
+def identity(t):
+    return t
+
 def divisible_by(num, den):
     return (num % den) == 0
 
 def normalize(t, eps = 1e-6):
-    return F.layer_norm(t, t.shape[-1:], eps = eps)
+    return F.layer_norm(t, t.shape, eps = eps)
 
 # class
 
@@ -45,18 +50,21 @@ class EvoStrategy(Module):
     @beartype
     def __init__(
         self,
-        model: Module,
+        model: Module | list[Module],
         *,
         environment: Callable[[Module], float | int | Tensor],  # the environment is simply a function that takes in the model and returns a fitness score
         num_generations,
         noise_population_size = 30,
         learning_rate = 1e-3,
         noise_scale = 1e-3,                 # the noise scaling during rollouts with environment, todo - figure out right value and make sure it can also be customized per parameter name through a dict
+        mirror_sampling = True,
         params_to_optimize: list[str] | Module | list[Module] | list[Parameter] | None = None,
         noise_low_rank: int | None = None,
-        use_optimizer = False,
-        optimizer_klass = AdamAtan2,
+        rollout_fixed_seed = True,
+        use_optimizer = True,
+        optimizer_klass = partial(SGD, nesterov = True, momentum = 0.1, weight_decay = 1e-2),
         optimizer_kwargs: dict = dict(),
+        transform_fitness: Callable = identity,
         fitness_to_weighted_factor: Callable[[Tensor], Tensor] = normalize,
         checkpoint_every = None,            # saving every number of generations
         checkpoint_path = './checkpoints',
@@ -67,6 +75,9 @@ class EvoStrategy(Module):
         super().__init__()
 
         self.accelerate = Accelerator(cpu = cpu, **accelerate_kwargs)
+
+        if isinstance(model, list):
+            model = ModuleList(model)
 
         self.model = model
         self.noisable_model = Noisable(model, low_rank = noise_low_rank)
@@ -116,10 +127,19 @@ class EvoStrategy(Module):
 
         # the function that transforms a tensor of fitness floats to the weight for the weighted average of the noise for rolling out 1x1 ES
 
+        self.transform_fitness = transform_fitness # a function that gets called before converting to weights for the weighted noise update - eventually get rank normalization
+
         self.fitness_to_weighted_factor = fitness_to_weighted_factor
 
+        self.mirror_sampling = mirror_sampling # mirror / antithetical sampling - reducing variance by doing positive + negative of noise and subtracting
+
         self.noise_scale = noise_scale
+
         self.learning_rate = learning_rate
+
+        # rolling out with a fixed seed
+
+        self.rollout_fixed_seed = rollout_fixed_seed
 
         # maybe use optimizer to update, allow for Adam
 
@@ -165,18 +185,29 @@ class EvoStrategy(Module):
         fitnesses = fitnesses.to(self.device)
         seeds_for_population = seeds_for_population.to(self.device)
 
-        # they use a simple z-score for the fitnesses, need to figure out the natural ES connection
+        # maybe transform fitnesses
 
-        noise_weights = self.fitness_to_weighted_factor(fitnesses)
+        if exists(self.transform_fitness):
+            fitnesses = self.transform_fitness(fitnesses)
 
-        noise_weights /= self.noise_scale
+        # maybe normalize the fitness with z-score
+
+        fitnesses = self.fitness_to_weighted_factor(fitnesses)
+
+        if self.mirror_sampling:
+            fitness_pos, fitness_neg = fitnesses.unbind(dim = -1)
+            weights = fitness_pos - fitness_neg
+        else:
+            weights = fitnesses
+
+        weights /= self.noise_scale * (2. if self.mirror_sampling else 1.)
 
         if not use_optimizer:
-            noise_weights *= self.learning_rate # some learning rate that subsumes another constant
+            weights *= self.learning_rate # some learning rate that subsumes another constant
 
         # update one seed at a time for enabling evolutionary strategy for large models
 
-        for individual_seed, noise_weight in zip(seeds_for_population.tolist(), noise_weights.tolist()):
+        for individual_seed, weight in zip(seeds_for_population.tolist(), weights.tolist()):
 
             individual_param_seeds = with_seed(individual_seed)(torch.randint)(0, MAX_SEED_VALUE, (self.num_params,))
 
@@ -184,7 +215,7 @@ class EvoStrategy(Module):
 
             # set the noise weight
 
-            noise_config = {param_name: (seed, noise_weight) for param_name, seed in noise_config.items()}
+            noise_config = {param_name: (seed, weight) for param_name, seed in noise_config.items()}
 
             # now update
 
@@ -206,7 +237,8 @@ class EvoStrategy(Module):
     @torch.inference_mode()
     def forward(
         self,
-        filename = 'evolved.model'
+        filename = 'evolved.model',
+        num_generations = None
     ):
 
         model = self.noisable_model.to(self.device)
@@ -225,22 +257,30 @@ class EvoStrategy(Module):
 
         noise_indices = arange(pop_size_round_up).chunk(world_size)[rank]
 
+        # maybe synced seed
+
+        def maybe_get_synced_seed():
+            seed = randint(0, int(1e9), (), device = self.device)
+
+            if is_distributed:
+                seed = self.accelerate.reduce(seed, reduction = 'sum')
+
+            return seed.item()
+
         # through many generations
+
+        num_generations = default(num_generations, self.num_generations)
 
         generation = 1
 
-        while generation <= self.num_generations:
+        # loop through generations
+
+        while generation <= num_generations:
 
             # predetermine the seeds for each population
             # each seed is then used as a seed for all the parameters
 
-            synced_seed = None
-
-            if is_distributed:
-                seed_for_pop = randint(0, int(1e9), (), device = self.device)
-                synced_seed = self.accelerate.reduce(seed_for_pop, reduction = 'sum').item()
-
-            seeds_for_population = with_seed(synced_seed)(randint)(0, MAX_SEED_VALUE, (pop_size_round_up,))
+            seeds_for_population = with_seed(maybe_get_synced_seed())(randint)(0, MAX_SEED_VALUE, (pop_size_round_up,))
 
             # divy up work across machine
 
@@ -248,12 +288,27 @@ class EvoStrategy(Module):
 
             fitnesses = []
 
+            # function for fitness
+
+            def rollout_for_fitness():
+                fitness = self.environment(model)
+
+                if is_tensor(fitness):
+                    assert fitness.numel() == 1
+                    fitness = fitness.item()
+
+                return fitness
+
+            # seeds
+
+            maybe_rollout_seed = maybe_get_synced_seed() if self.rollout_fixed_seed else None
+
             # now loop through the entire population of noise
 
             for noise_index, individual_seed in zip(noise_indices, seeds_for_machine):
 
                 if noise_index >= pop_size:
-                    fitnesses.append(0)
+                    fitnesses.append([0., 0.] if self.mirror_sampling else 0.)
                     continue
 
                 individual_param_seeds = with_seed(individual_seed)(randint)(0, MAX_SEED_VALUE, (self.num_params,))
@@ -261,14 +316,21 @@ class EvoStrategy(Module):
                 noise_config = dict(zip(self.param_names_to_optimize, individual_param_seeds.tolist()))
                 noise_config = {param_name: (seed, self.noise_scale) for param_name, seed in noise_config.items()}
 
+                # maybe roll out with a fixed seed
+
                 with model.temp_add_noise_(noise_config):
-                    fitness = self.environment(model)
+                    fitness = with_seed(maybe_rollout_seed)(rollout_for_fitness)()
 
-                    if is_tensor(fitness):
-                        assert fitness.numel() == 1
-                        fitness = fitness.item()
+                if not self.mirror_sampling:
+                    fitnesses.append(fitness)
+                    continue
 
-                fitnesses.append(fitness)
+                # handle mirror sampling
+
+                with model.temp_add_noise_(noise_config, negate = True):
+                    fitness_mirrored = with_seed(maybe_rollout_seed)(rollout_for_fitness)()
+
+                fitnesses.append([fitness, fitness_mirrored])
 
             # normalize the fitness and weighted sum of all the noise is the update
 
