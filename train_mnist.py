@@ -20,6 +20,8 @@ model = nn.Sequential(
     ResidualNormedMLP(dim_in = 784, dim = 512, depth = 8, residual_every = 2, dim_out = 10)
 )
 
+batch_size = 128
+
 # data
 
 dataset = datasets.MNIST('./data', train = True, download = True, transform = transforms.ToTensor())
@@ -29,7 +31,7 @@ dataset = datasets.MNIST('./data', train = True, download = True, transform = tr
 def loss_mnist(model):
     device = next(model.parameters()).device
     
-    dataloader = DataLoader(dataset, batch_size = 32, shuffle = True)
+    dataloader = DataLoader(dataset, batch_size = batch_size, shuffle = True)
     data_iterator = iter(dataloader)
     data, target = next(data_iterator)
 
