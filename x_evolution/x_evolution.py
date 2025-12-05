@@ -4,6 +4,7 @@ from typing import Callable
 from math import ceil
 from pathlib import Path
 from functools import partial
+from time import perf_counter
 
 import torch
 from torch import tensor, Tensor, is_tensor, arange, randint
@@ -317,6 +318,9 @@ class EvoStrategy(Module):
 
             maybe_rollout_seed = maybe_get_synced_seed() if self.rollout_fixed_seed else None
 
+            # start timing generation
+            generate_start = perf_counter()
+
             # now loop through the entire population of noise
 
             for noise_index, individual_seed in zip(noise_indices, seeds_for_machine):
@@ -355,6 +359,9 @@ class EvoStrategy(Module):
             if is_distributed:
                 fitnesses = self.accelerate.gather(fitnesses)
 
+            # end timing generation
+            generate_time = perf_counter() - generate_start
+
             # validate fitnesses
 
             if exists(self.reject_generation_fitnesses_if) and self.reject_generation_fitnesses_if(fitnesses):
@@ -363,14 +370,20 @@ class EvoStrategy(Module):
 
             # pass fitnesses to evolve function
 
+            # start timing update
+            update_start = perf_counter()
+
             self.evolve_(
                 fitnesses[:pop_size],
                 seeds_for_population[:pop_size]
             )
 
+            # end timing update
+            update_time = perf_counter() - update_start
+
             # log
 
-            self.print(f'[{generation}] average fitness: {fitnesses.mean():.3f} | fitness std: {fitnesses.std():.3f}')
+            self.print(f'[{generation}] average fitness: {fitnesses.mean():.3f} | fitness std: {fitnesses.std():.3f} | min fitness: {fitnesses.min():.3f} | max fitness: {fitnesses.max():.3f} | generate_time: {generate_time:.3f}s | update_time: {update_time:.3f}s')
 
             # maybe checkpoint
 
