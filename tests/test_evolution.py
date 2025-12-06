@@ -11,12 +11,16 @@ model = MLP(8, 16, 4)
 @param('noise_low_rank', (None, 1))
 @param('mirror_sampling', (False, True))
 @param('multi_models', (False, True))
+@param('learned_sigma', (False, True))
+@param('use_sigma_optimizer', (False, True))
 def test_evo_strat(
     params_to_optimize,
     use_optimizer,
     noise_low_rank,
     mirror_sampling,
-    multi_models
+    multi_models,
+    learned_sigma,
+    use_sigma_optimizer
 ):
     from random import randrange
 
@@ -31,10 +35,12 @@ def test_evo_strat(
         to_optim,
         environment = lambda model: float(randrange(100)),
         num_generations = 2,
+        learned_noise_scale = learned_sigma,
         params_to_optimize = params_to_optimize,
         use_optimizer = use_optimizer,
         noise_low_rank = noise_low_rank,
-        mirror_sampling = mirror_sampling
+        mirror_sampling = mirror_sampling,
+        use_sigma_optimizer = use_sigma_optimizer
     )
 
     evo_strat('evolve', 1)

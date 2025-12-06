@@ -19,6 +19,7 @@ class LunarEnvironment(Module):
         video_folder = './recordings',
         render_every_eps = 500,
         max_steps = 500,
+        repeats = 1
     ):
         super().__init__()
 
@@ -36,36 +37,40 @@ class LunarEnvironment(Module):
 
         self.env = env
         self.max_steps = max_steps
+        self.repeats = repeats
 
     def forward(self, model):
 
         device = next(model.parameters()).device
 
         seed = torch.randint(0, int(1e6), ())
-        state, _ = self.env.reset(seed = seed.item())
 
-        step = 0
         cum_reward = 0.
 
-        while step < self.max_steps:
+        for _ in range(self.repeats):
+            state, _ = self.env.reset(seed = seed.item())
 
-            state = torch.from_numpy(state).to(device)
+            step = 0
 
-            action_logits = model(state)
+            while step < self.max_steps:
 
-            action = F.gumbel_softmax(action_logits, hard = True).argmax(dim = -1)
+                state = torch.from_numpy(state).to(device)
 
-            next_state, reward, truncated, terminated, *_ = self.env.step(action.item())
+                action_logits = model(state)
 
-            cum_reward += float(reward)
-            step += 1
+                action = F.gumbel_softmax(action_logits, hard = True).argmax(dim = -1)
 
-            state = next_state
+                next_state, reward, truncated, terminated, *_ = self.env.step(action.item())
 
-            if truncated or terminated:
-                break
+                cum_reward += float(reward)
+                step += 1
 
-        return cum_reward
+                state = next_state
+
+                if truncated or terminated:
+                    break
+
+        return cum_reward / self.repeats
 
 # evo strategy
 
@@ -84,12 +89,12 @@ actor = ResidualNormedMLP(
 
 evo_strat = EvoStrategy(
     actor,
-    environment = LunarEnvironment(),
+    environment = LunarEnvironment(repeats = 1),
     num_generations = 50_000,
     noise_population_size = 60,
     noise_low_rank = 2,
     noise_scale = 1e-1,
-    learning_rate = 1e-3
+    learning_rate = 5e-2
 )
 
 evo_strat()

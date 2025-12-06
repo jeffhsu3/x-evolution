@@ -7,7 +7,7 @@ from functools import partial
 
 import torch
 from torch import tensor, Tensor, is_tensor, arange, randint
-from torch.nn import Module, ModuleList, Parameter
+from torch.nn import Module, ModuleList, Parameter, ParameterList
 from torch.optim import SGD
 
 import torch.nn.functional as F
@@ -56,14 +56,20 @@ class EvoStrategy(Module):
         num_generations,
         noise_population_size = 30,
         learning_rate = 1e-3,
-        noise_scale = 1e-3,                 # the noise scaling during rollouts with environment, todo - figure out right value and make sure it can also be customized per parameter name through a dict
         mirror_sampling = True,
         params_to_optimize: list[str] | Module | list[Module] | list[Parameter] | None = None,
         noise_low_rank: int | None = None,
         rollout_fixed_seed = True,
+        noise_scale = 1e-2,  # the noise scaling during rollouts with environment, todo - figure out right value and make sure it can also be customized per parameter name through a dict
+        learned_noise_scale = False,
+        noise_scale_learning_rate = 1e-5,
+        noise_scale_clamp_range: tuple[float, float] | None = None,
         use_optimizer = True,
         optimizer_klass = partial(SGD, nesterov = True, momentum = 0.1, weight_decay = 1e-2),
         optimizer_kwargs: dict = dict(),
+        use_sigma_optimizer = True,
+        sigma_optimizer_klass = partial(SGD, nesterov = True, momentum = 0.1),
+        sigma_optimizer_kwargs: dict = dict(),
         transform_fitness: Callable = identity,
         fitness_to_weighted_factor: Callable[[Tensor], Tensor] = normalize,
         checkpoint_every = None,            # saving every number of generations
@@ -141,9 +147,24 @@ class EvoStrategy(Module):
 
         self.mirror_sampling = mirror_sampling # mirror / antithetical sampling - reducing variance by doing positive + negative of noise and subtracting
 
+        self.learning_rate = learning_rate
+
+        # noise scale, which can be fixed or learned
+
         self.noise_scale = noise_scale
 
-        self.learning_rate = learning_rate
+        self.learned_noise_scale = learned_noise_scale
+
+        if learned_noise_scale:
+            self.sigmas = ParameterList([Parameter(torch.ones(()) * noise_scale) for _ in range(len(named_parameters_dict))])
+            self.param_name_to_sigma_index = {name: i for i, name in enumerate(named_parameters_dict.keys())}
+
+            self.sigma_clamp_ = identity
+
+            if exists(noise_scale_clamp_range):
+                self.sigma_clamp_ = lambda t: t.clamp_(*noise_scale_clamp_range)
+
+        self.noise_scale_learning_rate = noise_scale_learning_rate
 
         # rolling out with a fixed seed
 
@@ -156,6 +177,11 @@ class EvoStrategy(Module):
         if use_optimizer:
             optim_params = [named_parameters_dict[name] for name in params_to_optimize]
             self.optimizer = optimizer_klass(optim_params, lr = learning_rate, **optimizer_kwargs)
+
+        self.use_sigma_optimizer = use_sigma_optimizer
+
+        if learned_noise_scale and use_sigma_optimizer:
+            self.sigma_optimizer = sigma_optimizer_klass(self.sigmas, lr = noise_scale_learning_rate, **sigma_optimizer_kwargs)
 
         # rejecting the fitnesses for a certain generation if this function is true
 
@@ -174,6 +200,13 @@ class EvoStrategy(Module):
 
     def print(self, *args, **kwargs):
         return self.accelerate.print(*args, **kwargs)
+
+    def _get_noise_scale(self, param_name):
+        if not self.learned_noise_scale:
+            return self.noise_scale
+
+        sigma_index = self.param_name_to_sigma_index[param_name]
+        return self.sigmas[sigma_index]
 
     @torch.inference_mode()
     def evolve_(
@@ -208,10 +241,15 @@ class EvoStrategy(Module):
         else:
             weights = fitnesses
 
-        weights /= self.noise_scale * (2. if self.mirror_sampling else 1.)
+        weights /= self.noise_population_size * (2. if self.mirror_sampling else 1.)
 
         if not use_optimizer:
             weights *= self.learning_rate # some learning rate that subsumes another constant
+
+        # maybe learned sigma
+
+        if self.learned_noise_scale:
+            grad_sigmas = [torch.zeros_like(sigma) for sigma in self.sigmas]
 
         # update one seed at a time for enabling evolutionary strategy for large models
 
@@ -219,9 +257,13 @@ class EvoStrategy(Module):
 
             individual_param_seeds = with_seed(individual_seed)(torch.randint)(0, MAX_SEED_VALUE, (self.num_params,))
 
+            # setup noise config
+
             noise_config = dict(zip(self.param_names_to_optimize, individual_param_seeds.tolist()))
 
             noise_config_with_weight = dict()
+
+            # loop through each noise
 
             for param_name, seed in noise_config.items():
 
@@ -231,18 +273,52 @@ class EvoStrategy(Module):
                 # reproduce the noise from the seed
 
                 noise = with_seed(seed)(model.create_noise_fn)(shape, dtype = dtype)
+                noise = noise.to(self.device)
+                # scale the weight
+
+                noise_scale = self._get_noise_scale(param_name)
+
+                scaled_weight = weight / noise_scale
 
                 # set the noise weight
 
-                noise_config_with_weight[param_name] = (noise, weight)
+                noise_config_with_weight[param_name] = (noise, scaled_weight)
 
-            # now update
+                # maybe learned sigma
+
+                if self.learned_noise_scale:
+                    one_grad_sigma = weight * ((noise ** 2 - 1) / noise_scale)
+
+                    sigma_index = self.param_name_to_sigma_index[param_name]
+                    sigma = self.sigmas[sigma_index]
+
+                    if sigma.numel() == 1:
+                        one_grad_sigma = one_grad_sigma.mean()
+
+                    grad_sigmas[sigma_index].add_(one_grad_sigma)
+
+            # now update params for one seed
 
             model.add_noise_(noise_config_with_weight, negate = use_optimizer, add_to_grad = use_optimizer)
 
         if use_optimizer:
             self.optimizer.step()
             self.optimizer.zero_grad()
+
+        if self.learned_noise_scale:
+
+            if self.use_sigma_optimizer:
+                for sigma, grad_sigma in zip(self.sigmas, grad_sigmas):
+                    sigma.grad = -grad_sigma
+
+                self.sigma_optimizer.step()
+                self.sigma_optimizer.zero_grad()
+            else:
+                for sigma, grad_sigma in zip(self.sigmas, grad_sigmas):
+                    sigma.add_(grad_sigma * self.noise_scale_learning_rate)
+
+            for sigma in self.sigmas:
+                self.sigma_clamp_(sigma)
 
     def checkpoint(self, filename = 'evolved.model'):
 
@@ -261,6 +337,11 @@ class EvoStrategy(Module):
     ):
 
         model = self.noisable_model.to(self.device)
+
+        # maybe sigmas
+
+        if self.learned_noise_scale:
+             self.sigmas = self.sigmas.to(self.device)
 
         # get world size, rank, and determine if distributed
 
@@ -333,11 +414,20 @@ class EvoStrategy(Module):
                 individual_param_seeds = with_seed(individual_seed)(randint)(0, MAX_SEED_VALUE, (self.num_params,))
 
                 noise_config = dict(zip(self.param_names_to_optimize, individual_param_seeds.tolist()))
-                noise_config = {param_name: (seed, self.noise_scale) for param_name, seed in noise_config.items()}
+
+                # determine noise scale, which can be fixed or learned
+
+                noise_config_with_scale = dict()
+
+                for param_name, seed in noise_config.items():
+
+                    noise_scale = self._get_noise_scale(param_name)
+
+                    noise_config_with_scale[param_name] = (seed, noise_scale)
 
                 # maybe roll out with a fixed seed
 
-                with model.temp_add_noise_(noise_config):
+                with model.temp_add_noise_(noise_config_with_scale):
                     fitness = with_seed(maybe_rollout_seed)(rollout_for_fitness)()
 
                 if not self.mirror_sampling:
@@ -346,7 +436,7 @@ class EvoStrategy(Module):
 
                 # handle mirror sampling
 
-                with model.temp_add_noise_(noise_config, negate = True):
+                with model.temp_add_noise_(noise_config_with_scale, negate = True):
                     fitness_mirrored = with_seed(maybe_rollout_seed)(rollout_for_fitness)()
 
                 fitnesses.append([fitness, fitness_mirrored])
@@ -360,6 +450,11 @@ class EvoStrategy(Module):
             if is_distributed:
                 fitnesses = self.accelerate.gather(fitnesses)
 
+            # remove padding
+
+            fitnesses = fitnesses[:pop_size]
+            seeds_for_population = seeds_for_population[:pop_size]
+
             # validate fitnesses
 
             if exists(self.reject_generation_fitnesses_if) and self.reject_generation_fitnesses_if(fitnesses):
@@ -368,14 +463,17 @@ class EvoStrategy(Module):
 
             # pass fitnesses to evolve function
 
-            self.evolve_(
-                fitnesses[:pop_size],
-                seeds_for_population[:pop_size]
-            )
+            self.evolve_(fitnesses, seeds_for_population)
 
             # log
 
-            self.print(f'[{generation}] average fitness: {fitnesses.mean():.3f} | fitness std: {fitnesses.std():.3f}')
+            msg = f'[{generation}] average fitness: {fitnesses.mean():.3f} | fitness std: {fitnesses.std():.3f}'
+
+            if self.learned_noise_scale:
+                avg_sigma = torch.stack(list(self.sigmas)).mean().item()
+                msg += f' | avg sigma: {avg_sigma:.3f}'
+
+            self.print(msg)
 
             # maybe checkpoint
 

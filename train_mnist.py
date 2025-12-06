@@ -54,7 +54,7 @@ evo_strat = EvoStrategy(
     noise_scale = 1e-2,
     noise_low_rank = 2,
     num_generations = 10_000,
-    learning_rate = 1e-5
+    learning_rate = 1e-3
 )
 
 evo_strat()
