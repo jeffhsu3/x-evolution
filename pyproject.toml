@@ -27,9 +27,16 @@ dependencies = [
     "beartype",
     "einops>=0.8.0",
     "torch>=2.4",
+<<<<<<< HEAD
     "x-mlps-pytorch>=0.1.29",
     "x-transformers>=2.11.23",
     "torchvision",
+=======
+    "x-mlps-pytorch>=0.1.26",
+    "x-transformers>=2.11.23",
+    "torchvision",
+    "pandas",
+>>>>>>> 9c530eca9242b1bb359174a4c625dc2a6c60a4a6
     "seaborn",
     "matplotlib",
 ]
