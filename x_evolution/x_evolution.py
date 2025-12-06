@@ -62,7 +62,7 @@ class EvoStrategy(Module):
         rollout_fixed_seed = True,
         noise_scale = 1e-2,  # the noise scaling during rollouts with environment, todo - figure out right value and make sure it can also be customized per parameter name through a dict
         learned_noise_scale = False,
-        noise_scale_learning_rate = 1e-5,
+        noise_scale_learning_rate = 5e-3,
         noise_scale_clamp_range: tuple[float, float] | None = None,
         use_optimizer = True,
         optimizer_klass = partial(SGD, nesterov = True, momentum = 0.1, weight_decay = 1e-2),

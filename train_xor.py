@@ -43,7 +43,7 @@ evo_strat = EvoStrategy(
     learning_rate = 1e-2,
     noise_scale = 1e-1,
     learned_noise_scale = True,
-    noise_scale_learning_rate = 1e-2,
+    noise_scale_learning_rate = 5e-3,
     sigma_optimizer_klass = torch.optim.Adam,
     sigma_optimizer_kwargs = dict(betas = (0.9, 0.99))
 )

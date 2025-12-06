@@ -89,12 +89,15 @@ actor = ResidualNormedMLP(
 
 evo_strat = EvoStrategy(
     actor,
-    environment = LunarEnvironment(repeats = 1),
+    environment = LunarEnvironment(repeats = 2),
     num_generations = 50_000,
     noise_population_size = 60,
     noise_low_rank = 2,
     noise_scale = 1e-1,
-    learning_rate = 5e-2
+    learned_noise_scale = True,
+    use_sigma_optimizer = True,
+    learning_rate = 5e-2,
+    noise_scale_learning_rate = 1e-2
 )
 
 evo_strat()
