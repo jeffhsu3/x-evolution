@@ -1,6 +1,6 @@
 ## x-evolution
 
-Implementation of various evolutionary algorithms, starting with evolutionary strategies
+Implementation of various evolutionary algorithms, starting with [evolutionary strategies](https://blog.otoro.net/2017/10/29/visual-evolution-strategies/)
 
 ## Install
 
@@ -93,3 +93,14 @@ $ accelerate launch train.py
     url     = {https://arxiv.org/abs/1706.10295}, 
 }
 ```
+
+```bibtex
+@article{ha2017visual,
+    title   = "A Visual Guide to Evolution Strategies",
+    author  = "Ha, David",
+    journal = "blog.otoro.net",
+    year    = "2017",
+    url     = "https://blog.otoro.net/2017/10/29/visual-evolution-strategies/"
+}
+```
+
