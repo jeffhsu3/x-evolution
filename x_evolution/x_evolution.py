@@ -515,7 +515,7 @@ class EvoStrategy(Module):
             if self.learned_noise_scale:
                 packed_sigma, _ = pack(list(self.sigmas), '*')
                 avg_sigma = packed_sigma.mean().item()
-                msg += f' | avg sigma: {avg_sigma:.3f}'
+                msg += f' | average sigma: {avg_sigma:.3f}'
 
             self.print(msg)
 
