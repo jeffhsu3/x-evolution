@@ -8,7 +8,8 @@ from functools import partial
 import torch
 from torch import tensor, Tensor, is_tensor, arange, randint
 from torch.nn import Module, ModuleList, Parameter, ParameterList
-from torch.optim import SGD, Adam
+from torch.optim import SGD, Adam, Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 
 import torch.nn.functional as F
 
@@ -73,11 +74,17 @@ class EvoStrategy(Module):
         noise_scale_learning_rate = 1e-5,
         noise_scale_clamp_range: tuple[float, float] = (1e-3, 1e-1),
         use_optimizer = True,
-        optimizer_klass = partial(SGD, nesterov = True, momentum = 0.1, weight_decay = 1e-2),
+        optimizer_klass: type[Optimizer] | Callable = partial(SGD, nesterov = True, momentum = 0.1, weight_decay = 1e-2),
         optimizer_kwargs: dict = dict(),
         use_sigma_optimizer = True,
-        sigma_optimizer_klass = partial(SGD, nesterov = True, momentum = 0.1),
+        sigma_optimizer_klass: type[Optimizer] | Callable = partial(SGD, nesterov = True, momentum = 0.1),
         sigma_optimizer_kwargs: dict = dict(),
+        use_scheduler = False,
+        scheduler_klass: type[LRScheduler] | None = None,
+        scheduler_kwargs: dict = dict(),
+        use_sigma_scheduler = False,
+        sigma_scheduler_klass: type[LRScheduler] | None = None,
+        sigma_scheduler_kwargs: dict = dict(),
         transform_fitness: Callable = identity,
         fitness_to_weighted_factor: Callable[[Tensor], Tensor] = normalize,
         checkpoint_every = None,            # saving every number of generations
@@ -198,6 +205,16 @@ class EvoStrategy(Module):
 
         # rejecting the fitnesses for a certain generation if this function is true
 
+        self.use_scheduler = use_scheduler
+
+        if use_scheduler and exists(scheduler_klass) and use_optimizer:
+            self.scheduler = scheduler_klass(self.optimizer, **scheduler_kwargs)
+
+        self.use_sigma_scheduler = use_sigma_scheduler
+
+        if use_sigma_scheduler and exists(sigma_scheduler_klass) and use_sigma_optimizer:
+            self.sigma_scheduler = sigma_scheduler_klass(self.sigma_optimizer, **sigma_scheduler_kwargs)
+
         self.reject_generation_fitnesses_if = reject_generation_fitnesses_if
 
         # verbose
@@ -310,9 +327,6 @@ class EvoStrategy(Module):
 
                     if self.use_sigma_optimizer:
                         accum_grad_(sigma, -one_grad_sigma)
-
-                        self.sigma_optimizer.step()
-                        self.sigma_optimizer.zero_grad()
                     else:
                         sigma.add_(one_grad_sigma * self.noise_scale_learning_rate)
 
@@ -324,10 +338,16 @@ class EvoStrategy(Module):
             self.optimizer.step()
             self.optimizer.zero_grad()
 
+            if self.use_scheduler and exists(self.scheduler):
+                self.scheduler.step()
+
         if self.learned_noise_scale:
             if self.use_sigma_optimizer:
                 self.sigma_optimizer.step()
                 self.sigma_optimizer.zero_grad()
+
+                if self.use_sigma_scheduler and exists(self.sigma_scheduler):
+                    self.sigma_scheduler.step()
 
             for sigma in self.sigmas:
                 self.sigma_clamp_(sigma)

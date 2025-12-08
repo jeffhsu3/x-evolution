@@ -1,6 +1,7 @@
 import torch
 from torch import tensor
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import LambdaLR
 
 # model
 
@@ -44,7 +45,13 @@ evo_strat = EvoStrategy(
     noise_scale = 1e-1,
     noise_scale_clamp_range = (5e-2, 2e-1),
     learned_noise_scale = True,
-    noise_scale_learning_rate = 5e-4
+    noise_scale_learning_rate = 5e-4,
+    use_scheduler = True,
+    scheduler_klass = LambdaLR,
+    scheduler_kwargs = dict(lr_lambda = lambda step: min(1., step / 10.)),
+    use_sigma_scheduler = True,
+    sigma_scheduler_klass = LambdaLR,
+    sigma_scheduler_kwargs = dict(lr_lambda = lambda step: min(1., step / 10.))
 )
 
 evo_strat()
