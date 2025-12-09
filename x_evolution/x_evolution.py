@@ -366,10 +366,16 @@ class EvoStrategy(Module):
         self,
         filename = 'evolved.model',
         num_generations = None,
-        disable_distributed = False
+        disable_distributed = False,
+        rollback_model_at_end = False
     ):
 
         model = self.noisable_model.to(self.device)
+
+        # maybe save model for rolling back (for meta-evo)
+
+        if rollback_model_at_end:
+            self.checkpoint('initial.model')
 
         # maybe sigmas
 
@@ -533,7 +539,16 @@ class EvoStrategy(Module):
 
         self.print('evolution complete')
 
+        # final checkpoint
+
         self.checkpoint(f'{filename}.final.{generation}')
+
+        # maybe rollback
+
+        if rollback_model_at_end:
+            orig_state_dict = torch.load(str(self.checkpoint_folder / 'initial.model.pt'), weights_only = True)
+
+            self.model.load_state_dict(orig_state_dict)
 
         # return fitnesses across generations
         # for meta-evolutionary (nesting EvoStrategy within the environment of another and optimizing some meta-network)

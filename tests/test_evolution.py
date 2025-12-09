@@ -45,3 +45,5 @@ def test_evo_strat(
 
     evo_strat('evolve', 1)
     evo_strat('more.evolve', 1)
+
+    fitnesses = evo_strat('more.evolve', 2, rollback_model_at_end = True)
