@@ -25,19 +25,24 @@ class LunarEnvironment(Module):
 
         env = gym.make('LunarLander-v3', render_mode = 'rgb_array')
 
-        rmtree(video_folder, ignore_errors = True)
-
-        env = gym.wrappers.RecordVideo(
-            env = env,
-            video_folder = video_folder,
-            name_prefix = 'recording',
-            episode_trigger = lambda eps_num: (eps_num % render_every_eps) == 0,
-            disable_logger = True
-        )
-
         self.env = env
         self.max_steps = max_steps
         self.repeats = repeats
+        self.video_folder = video_folder
+        self.render_every_eps = render_every_eps
+
+    def pre_main_callback(self):
+        # the `pre_main_callback` on the environment passed in is called before the start of the evolutionary strategies loop
+
+        rmtree(self.video_folder, ignore_errors = True)
+
+        self.env = gym.wrappers.RecordVideo(
+            env = self.env,
+            video_folder = self.video_folder,
+            name_prefix = 'recording',
+            episode_trigger = lambda eps_num: (eps_num % self.render_every_eps) == 0,
+            disable_logger = True
+        )
 
     def forward(self, model):
 

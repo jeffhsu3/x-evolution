@@ -96,19 +96,29 @@ class EvoStrategy(Module):
         reject_generation_fitnesses_if: Callable[[Tensor], bool] | None = None
     ):
         super().__init__()
+        self.verbose = verbose
 
         if not exists(accelerator):
             accelerator = Accelerator(cpu = cpu, **accelerate_kwargs)
 
         self.accelerate = accelerator
 
+        # environment - with optional init
+
+        self.environment = environment
+
+        if accelerator.is_main_process:
+            if hasattr(environment, 'pre_main_callback') and callable(environment.pre_main_callback):
+                self.print('pre_main_callback detected on environment passed in and is invoked')
+                environment.pre_main_callback()
+
+        # take care of model and parameters
+
         if isinstance(model, list):
             model = ModuleList(model)
 
         self.model = model
         self.noisable_model = Noisable(model, low_rank = noise_low_rank)
-
-        self.environment = environment
 
         named_parameters_dict = dict(model.named_parameters())
 
@@ -216,10 +226,6 @@ class EvoStrategy(Module):
             self.sigma_scheduler = sigma_scheduler_klass(self.sigma_optimizer, **sigma_scheduler_kwargs)
 
         self.reject_generation_fitnesses_if = reject_generation_fitnesses_if
-
-        # verbose
-
-        self.verbose = verbose
 
         # checkpointing
 
