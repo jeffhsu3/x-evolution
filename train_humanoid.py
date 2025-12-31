@@ -17,8 +17,13 @@ import gymnasium as gym
 import numpy as np
 
 import torch
-from torch.nn import Module
+from torch.nn import Module, GRU, Linear
 import torch.nn.functional as F
+
+# functions
+
+def exists(v):
+    return v is not None
 
 def softclamp(t, value):
     return (t / value).tanh() * value
@@ -67,12 +72,14 @@ class HumanoidEnvironment(Module):
             state, _ = self.env.reset(seed = seed.item())
 
             step = 0
-
+            hiddens = None
+            last_action = None
+            
             while step < self.max_steps:
 
                 state = torch.from_numpy(state).float().to(device)
 
-                action_logits = model(state)
+                action_logits, hiddens = model(state, hiddens)
 
                 mean, log_var = action_logits.chunk(2, dim = -1)
 
@@ -82,12 +89,31 @@ class HumanoidEnvironment(Module):
                 sampled = mean + torch.randn_like(mean) * std
                 action = sampled.tanh() * 0.4
 
-                next_state, reward, truncated, terminated, *_ = self.env.step(action.detach().cpu().numpy())
+                next_state, reward, truncated, terminated, info = self.env.step(action.detach().cpu().numpy())
 
-                cum_reward += float(reward)
+                # reward functions
+
+                # encouraged to move forward (1.0) and stay upright (> 1.2 meters)
+
+                z_pos = next_state[0]
+                x_vel = next_state[5]
+
+                reward_forward = x_vel
+                reward_upright = float(z_pos > 1.2)
+
+                exploration_bonus = std.mean() * 0.05
+                penalize_extreme_actions = (mean.abs() > 1.).float().mean() * 0.05
+
+                penalize_action_change = 0.
+                if exists(last_action):
+                    penalize_action_change = (last_action - action).abs().mean() * 0.1
+
+                cum_reward += float(reward) + reward_forward + reward_upright + exploration_bonus - penalize_extreme_actions - penalize_action_change
+
                 step += 1
 
                 state = next_state
+                last_action = action
 
                 if truncated or terminated:
                     break
@@ -100,19 +126,41 @@ from x_evolution import EvoStrategy
 
 from x_mlps_pytorch.residual_normed_mlp import ResidualNormedMLP
 
-actor = ResidualNormedMLP(
-    dim_in = 348, # state
-    dim = 256,
-    depth = 8,
-    residual_every = 2,
-    dim_out = 17 * 2 # action mean logvar
-)
+class Model(Module):
+
+    def __init__(self):
+        super().__init__()
+
+        self.deep_mlp = ResidualNormedMLP(
+            dim_in = 348,
+            dim = 256,
+            depth = 8,
+            residual_every = 2
+        )
+
+        self.gru = GRU(256, 256, batch_first = True)
+
+        self.to_pred = Linear(256, 17 * 2, bias = False)
+
+    def forward(self, state, hiddens = None):
+
+        x = self.deep_mlp(state)
+
+        x = x.unsqueeze(0)
+        gru_out, hiddens = self.gru(x, hiddens)
+        x = x + gru_out
+        x = x.squeeze(0)
+
+        return self.to_pred(x), hiddens
 
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 evo_strat = EvoStrategy(
-    actor,
-    environment = HumanoidEnvironment(repeats = 2),
+    Model(),
+    environment = HumanoidEnvironment(
+        repeats = 1,
+        render_every_eps = 200
+    ),
     num_generations = 50_000,
     noise_population_size = 200,
     noise_low_rank = 1,
